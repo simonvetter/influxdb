@@ -34,7 +34,7 @@ type TSMReader struct {
 	mu              sync.RWMutex
 
 	// accessor provides access and decoding of blocks for the reader.
-	accessor blockAccessor
+	accessor accessor
 
 	// index is the index of all blocks.
 	index TSMIndex
@@ -231,7 +231,7 @@ func NewTSMReader(f *os.File, options ...tsmReaderOption) (*TSMReader, error) {
 	}
 	t.size = stat.Size()
 	t.lastModified = stat.ModTime().UnixNano()
-	t.accessor = &mmapAccessor{
+	t.accessor = accessor{
 		f:            f,
 		mmapWillNeed: t.madviseWillNeed,
 	}
@@ -1298,10 +1298,10 @@ func (d *indirectIndex) Close() error {
 	return munmap(d.offsets[:cap(d.offsets)])
 }
 
-// mmapAccess is mmap based block accessor.  It access blocks through an
+// Access is mmap based block accessor.  It access blocks through an
 // MMAP file interface.
-type mmapAccessor struct {
-	accessCount uint64 // Counter incremented everytime the mmapAccessor is accessed
+type accessor struct {
+	accessCount uint64 // Counter incremented everytime the accessor is accessed
 	freeCount   uint64 // Counter to determine whether the accessor can free its resources
 
 	mmapWillNeed bool // If true then mmap advise value MADV_WILLNEED will be provided the kernel for b.
@@ -1313,7 +1313,7 @@ type mmapAccessor struct {
 	index *indirectIndex
 }
 
-func (m *mmapAccessor) init() (*indirectIndex, error) {
+func (m *accessor) init() (*indirectIndex, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -1337,7 +1337,7 @@ func (m *mmapAccessor) init() (*indirectIndex, error) {
 		return nil, err
 	}
 	if len(m.b) < 8 {
-		return nil, fmt.Errorf("mmapAccessor: byte slice too small for indirectIndex")
+		return nil, fmt.Errorf("accessor: byte slice too small for indirectIndex")
 	}
 
 	// Hint to the kernel that we will be reading the file.  It would be better to hint
@@ -1352,7 +1352,7 @@ func (m *mmapAccessor) init() (*indirectIndex, error) {
 	indexOfsPos := len(m.b) - 8
 	indexStart := binary.BigEndian.Uint64(m.b[indexOfsPos : indexOfsPos+8])
 	if indexStart >= uint64(indexOfsPos) {
-		return nil, fmt.Errorf("mmapAccessor: invalid indexStart")
+		return nil, fmt.Errorf("accessor: invalid indexStart")
 	}
 
 	m.index = NewIndirectIndex()
@@ -1367,7 +1367,7 @@ func (m *mmapAccessor) init() (*indirectIndex, error) {
 	return m.index, nil
 }
 
-func (m *mmapAccessor) free() error {
+func (m *accessor) free() error {
 	accessCount := atomic.LoadUint64(&m.accessCount)
 	freeCount := atomic.LoadUint64(&m.freeCount)
 
@@ -1394,11 +1394,11 @@ func (m *mmapAccessor) free() error {
 	return madviseDontNeed(m.b)
 }
 
-func (m *mmapAccessor) incAccess() {
+func (m *accessor) incAccess() {
 	atomic.AddUint64(&m.accessCount, 1)
 }
 
-func (m *mmapAccessor) rename(path string) error {
+func (m *accessor) rename(path string) error {
 	m.incAccess()
 
 	m.mu.Lock()
@@ -1442,7 +1442,7 @@ func (m *mmapAccessor) rename(path string) error {
 	return nil
 }
 
-func (m *mmapAccessor) read(key []byte, timestamp int64) ([]Value, error) {
+func (m *accessor) read(key []byte, timestamp int64) ([]Value, error) {
 	entry := m.index.Entry(key, timestamp)
 	if entry == nil {
 		return nil, nil
@@ -1451,7 +1451,7 @@ func (m *mmapAccessor) read(key []byte, timestamp int64) ([]Value, error) {
 	return m.readBlock(entry, nil)
 }
 
-func (m *mmapAccessor) readBlock(entry *IndexEntry, values []Value) ([]Value, error) {
+func (m *accessor) readBlock(entry *IndexEntry, values []Value) ([]Value, error) {
 	m.incAccess()
 
 	m.mu.RLock()
@@ -1470,7 +1470,7 @@ func (m *mmapAccessor) readBlock(entry *IndexEntry, values []Value) ([]Value, er
 	return values, nil
 }
 
-func (m *mmapAccessor) readBytes(entry *IndexEntry, b []byte) (uint32, []byte, error) {
+func (m *accessor) readBytes(entry *IndexEntry, b []byte) (uint32, []byte, error) {
 	m.incAccess()
 
 	m.mu.RLock()
@@ -1487,7 +1487,7 @@ func (m *mmapAccessor) readBytes(entry *IndexEntry, b []byte) (uint32, []byte, e
 }
 
 // readAll returns all values for a key in all blocks.
-func (m *mmapAccessor) readAll(key []byte) ([]Value, error) {
+func (m *accessor) readAll(key []byte) ([]Value, error) {
 	m.incAccess()
 
 	blocks := m.index.Entries(key)
@@ -1535,14 +1535,14 @@ func (m *mmapAccessor) readAll(key []byte) ([]Value, error) {
 	return values, nil
 }
 
-func (m *mmapAccessor) path() string {
+func (m *accessor) path() string {
 	m.mu.RLock()
 	path := m.f.Name()
 	m.mu.RUnlock()
 	return path
 }
 
-func (m *mmapAccessor) close() error {
+func (m *accessor) close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
