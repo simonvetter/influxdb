@@ -50,7 +50,7 @@ func TestCommand_PIDFile(t *testing.T) {
 	}
 	go cmd.Close()
 
-	timeout := time.NewTimer(100 * time.Millisecond)
+	timeout := time.NewTimer(1 * time.Second)
 	select {
 	case <-timeout.C:
 		t.Fatal("unexpected timeout")
